@@ -1,0 +1,19 @@
+name: Security guards
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check Express syntax
+        run: node --check server-side/server.js
+      - name: Run authorization regression tests without database credentials
+        run: node --test server-side/tests/security.test.cjs
