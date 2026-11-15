@@ -15,6 +15,7 @@ const authRouter = require("./routes/auth");
 const ProfileRouter = require("./routes/userProfileData");
 const UserActionRouter = require("./routes/userActions");
 const BathroomActionRouter = require("./routes/bathroomActions");
+const { pickReviewChanges, belongsToSessionUser } = require("./security/permissions");
 
 // ...
 const path = require("path");
@@ -232,7 +233,7 @@ app.get("/users/:userId", async (req, res) => {
   console.log(userId);
 
   try {
-    const user = await User.findOne({ where: { id: userId } });
+    const user = await User.findOne({ where: { id: userId }, attributes: ["id", "name", "photo"] });
 
     if (user) {
       res.status(200).json(user);
@@ -428,7 +429,7 @@ app.get("/myBathrooms", authenticateUser, async (req, res) => {
           .status(403)
           .json({ message: "You are not authorized to delete this bathroom" });
       }
-      const deleteOp = await Bathroom.destroy({ where: { id: bathroomId } });
+      const deleteOp = await Bathroom.destroy({ where: { id: bathroomId, UserId: req.session.userId } });
       if (deleteOp > 0) {
         res.status(200).send({ message: "Bathroom deleted successfully" });
       } else {
@@ -440,23 +441,8 @@ app.get("/myBathrooms", authenticateUser, async (req, res) => {
     }
   });
   
-//----------------admin delete (no user authentixation)-----------
-app.delete("/adminbathrooms/:bathroomId", async (req, res) => {
-  const bathroomId = parseInt(req.params.bathroomId, 10);
-
-  try {
-    const deleteOp = await Bathroom.destroy({ where: { id: bathroomId } });
-    if (deleteOp > 0) {
-      res.status(200).send({ message: "Bathroom deleted successfully" });
-    } else {
-      res.status(404).send({ message: "Bathroom not found" });
-    }
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ message: err.message });
-  }
-});
-
+// The legacy /adminbathrooms endpoint was removed: it allowed anonymous deletion.
+// Administrative moderation must use a separately authenticated and authorized route.
 
 ///-------------------------------REVIEWS------------------------------------------
 //get all reviews for a single bathroom 
@@ -616,7 +602,7 @@ app.delete("/bathrooms/:bathroomId/:reviewsId", authenticateUser, async (req, re
         .json({ message: "You are not authorized to perform that action." });
     }
 
-    const deleteOp = await Review.destroy({ where: { id: reviewId } });
+    const deleteOp = await Review.destroy({ where: { id: reviewId, UserId: req.session.userId } });
 
     if (deleteOp > 0) {
       res.status(200).send({ message: "review deleted successfully" });
@@ -643,9 +629,10 @@ app.patch("/bathrooms/:bathroomId/:reviewId", authenticateUser, async (req, res)
         .json({ message: "You are not authorized to perform that action." });
     }
 
+    // Prevent clients from rewriting review ownership or target bathroom IDs.
     const [numberOfAffectedRows, affectedRows] = await Review.update(
-      req.body,
-      { where: { id: reviewId }, returning: true }
+      pickReviewChanges(req.body),
+      { where: { id: reviewId, UserId: req.session.userId }, returning: true }
     );
     if (numberOfAffectedRows > 0) {
       res.status(200).json(affectedRows[0]);
@@ -670,7 +657,7 @@ app.patch("/bathrooms/:bathroomId/:reviewId", authenticateUser, async (req, res)
 
 //Edit Rating (edit bathroom)
 
-app.patch("/bathrooms/:bathroomId", async (req, res) => {
+app.patch("/bathrooms/:bathroomId", authenticateUser, async (req, res) => {
   const bathroomId = parseInt(req.params.bathroomId, 10);
   try {
     const record = await Bathroom.findOne({ where: { id: bathroomId } });
@@ -678,12 +665,11 @@ app.patch("/bathrooms/:bathroomId", async (req, res) => {
       return res.status(404).json({ message: "Bathroom not found" });
     }
 
-    // Check if the user is authorized to edit the bathroom
-    // if (record.UserId !== parseInt(req.session.userId, 10)) {
-    //   return res
-    //     .status(403)
-    //     .json({ message: "You are not authorized to edit this bathroom." });
-    // }
+    // Only the creator may edit a user-submitted bathroom. Third-party
+    // entries have no owner and cannot be modified through this route.
+    if (!belongsToSessionUser(record.UserId, req.session.userId)) {
+      return res.status(403).json({ message: "You are not authorized to edit this bathroom." });
+    }
 
 
     //get bathroomid bathrooms current rating:
@@ -748,7 +734,7 @@ updates['rating'] = Math.round(newAvg);
 await curBathroom.set(updates);
 await curBathroom.save();
 
-res.message("updated");
+res.status(200).json({ message: "Bathroom updated" });
   //add new average to the request body 
     // const [numberOfAffectedRows, affectedRows] = await Bathroom.update(
 
